@@ -197,6 +197,7 @@ class EsriJSON2Pg(object):
             if "alias" in f:
                 if not f['name'] == f['alias']:
                     sql += f"\nCOMMENT ON COLUMN {self.out_table}." + f['name'] + " IS '" + f['alias'] + "';"
+        print(sql)
         return sql
 
     def change_geometry(self, geom=None, indx=None):
@@ -221,7 +222,7 @@ class EsriJSON2Pg(object):
             if self.geomType in ("POLYGON", "MULTIPOLYGON"):
                 wkt = f"SRID={self.sr};{self.geomType}" + str(geom['rings']).replace("[","(").replace("]",")")
                 wkt = re.sub(r'(\d)\,', r'\1', wkt)
-                return wkt.replace("), (", ",").replace(u"\x01", "")
+                return wkt.replace("), (", ",").replace(u"\x01", "").replace(" None, None", "")
             if self.geomType in ("LINESTRING", "MULTILINESTRING"):
                 pass
                 # todo: write this.
@@ -274,7 +275,7 @@ def _valid_endpoint(in_url):
     check_url = in_url[:-5] if in_url[-5:] == "query" else in_url
     if 200 <= requests.get(check_url).status_code < 300:
         return in_url
-    else: 
+    else:
         raise IOError("Invalid endpoint entered.")
 
 
@@ -321,6 +322,9 @@ def _validate_srid(in_srid):
 
 
 def _check_oid_range(in_domain, in_path):
+
+    return [f for f in range(173000, 174000, 1)]
+
     """
     Creates a range of object ids to query on
     :param in_domain: The base domain for the REST url
@@ -395,7 +399,7 @@ def _with_command_line(f):
         ap.add_argument("table", type=_valid_table, help="Schema-qualified table name. Example: \"gisdata.tablename\"")
         ap.add_argument("-srid", "--output-srid", default=None, type=_validate_srid)
         return f(ap.parse_args(), *args, **kwargs)
-    return wrap 
+    return wrap
 
 
 @_with_command_line
@@ -437,15 +441,15 @@ def main(cmd_line):
 
     # populate the destination table
     for l in oids:
-        if db_max >= l[1]:
-            continue
-        logging.info(f"Requesting {l[0]} <= objectid <= {l[1]}")
+        # if db_max >= l[1]:
+            # continue
+        logging.info(f"Requesting objectid = {l}")
         if table_exists:
             try:
-                chksql = f"select 1 from {cmd_line.table} where objectid between %s and %s"
+                chksql = f"select 1 from {cmd_line.table} where objectid = %s"
                 cur.execute(chksql, l)
                 if cur.rowcount > 0:
-                    logging.info(f"Record exist; skipping {l[0]} through {l[1]}")
+                    logging.info(f"Record exist; skipping {l}")
                     continue
 
             except Exception as e:
@@ -453,11 +457,14 @@ def main(cmd_line):
 
         # make request for new records
         try:
-            qs = f"?where=objectid+>%3D+{l[0]}+AND+objectid+<%3D+{l[1]}&text=&objectIds=&time=&geometry=" \
-                 f"&geometryType=esriGeometryEnvelope&inSR=&spatialRel=esriSpatialRelIntersects&relationParam=" \
-                 f"&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&returnIdsOnly=false" \
-                 f"&returnCountOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=&returnZ=false" \
-                 f"&returnM=false&gdbVersion=&returnDistinctValues=false&f=pjson"
+            qs = f"?where=&objectIds={l}&time=&geometry=&geometryType=esriGeometryEnvelope" \
+                f"&inSR=&spatialRel=esriSpatialRelIntersects&distance=&units=esriSRUnit_Meter&relationParam=" \
+                f"&outFields=*&returnGeometry=true&maxAllowableOffset=&geometryPrecision=&outSR=&having=&gdbVersion=" \
+                f"&historicMoment=&returnDistinctValues=false&returnIdsOnly=false&returnCountOnly=false" \
+                f"&returnExtentOnly=false&orderByFields=&groupByFieldsForStatistics=&outStatistics=" \
+                f"&returnZ=true&returnM=true&multipatchOption=xyFootprint&resultOffset=&resultRecordCount=" \
+                f"&returnTrueCurves=false&returnExceededLimitFeatures=false&quantizationParameters=" \
+                f"&returnCentroid=false&sqlFormat=none&resultType=&featureEncoding=esriDefault&f=pjson"
 
             jp = EsriJSON2Pg(requests.get(f"{domain}/{path}{qs}").json(), cmd_line.table,
                              out_srid=cmd_line.output_srid)
@@ -467,6 +474,9 @@ def main(cmd_line):
             i = 0
             for insert_statement_info in jp.insert_statements():
                 if "data" in insert_statement_info:
+                    print(insert_statement_info["sql"])
+                    print(insert_statement_info["data"])
+                    print(cur.mogrify(insert_statement_info["sql"], insert_statement_info["data"]))
                     cur.execute(insert_statement_info["sql"], insert_statement_info["data"])
                 i += 1
             cmd_line.connection.commit()
